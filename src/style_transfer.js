@@ -56,19 +56,8 @@ const loadImageToTensor = async (path) => {
 const saveImage = (path, tensor) => {
   const newTensor = tensor.add(MEANS).reshape([224, 224, 3]);
   const newTensorArray = Array.from(newTensor.dataSync());
-  // const imgFile = fs.createWriteStream(path);
-  let i = 0;
-
   const image = new Jimp(224, 224);
-
-  // newTensorArray = ndarray(newTensorArray, [224, 224, 3]);
-
-  // savePixels(newTensorArray, 'jpg')
-  //   .on('data', chunk => imgFile.write(chunk))
-  //   .on('end', () => console.log('end pixel stream'))
-  //   .on('finish', () => console.log('finish pixel stream'));
-
-  // eslint-disable-next-line no-new
+  let i = 0;
 
   image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, idx) {
     this.bitmap.data[idx + 0] = newTensorArray[i++];
