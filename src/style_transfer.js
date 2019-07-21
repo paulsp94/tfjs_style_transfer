@@ -1,8 +1,6 @@
 // const tf = require('@tensorflow/tfjs');
 const tf = require('@tensorflow/tfjs-node');
 const Jimp = require('jimp');
-const savePixels = require('save-pixels');
-const ndarray = require('ndarray');
 const fs = require('fs');
 
 const local = true;
@@ -59,7 +57,9 @@ const saveImage = (path, tensor) => {
   const newTensor = tensor.add(MEANS).reshape([224, 224, 3]);
   const newTensorArray = Array.from(newTensor.dataSync());
   // const imgFile = fs.createWriteStream(path);
-  const i = 0;
+  let i = 0;
+
+  const image = new Jimp(224, 224);
 
   // newTensorArray = ndarray(newTensorArray, [224, 224, 3]);
 
@@ -69,16 +69,20 @@ const saveImage = (path, tensor) => {
   //   .on('finish', () => console.log('finish pixel stream'));
 
   // eslint-disable-next-line no-new
-  new Jimp({ data: Buffer.from(newTensorArray), width: 224, height: 224 }, (err, image) => {
-    console.log(err, image);
-    // image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, idx) {
-    //   this.bitmap.data[idx + 0] = newTensorArray[i++];
-    //   this.bitmap.data[idx + 1] = newTensorArray[i++];
-    //   this.bitmap.data[idx + 2] = newTensorArray[i++];
-    //   this.bitmap.data[idx + 3] = 255;
-    // });
 
-    image.write(path, () => console.log('Finished writing Image: ', path));
+  image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, idx) {
+    this.bitmap.data[idx + 0] = newTensorArray[i++];
+    this.bitmap.data[idx + 1] = newTensorArray[i++];
+    this.bitmap.data[idx + 2] = newTensorArray[i++];
+    this.bitmap.data[idx + 3] = 255;
+  });
+
+  image.getBuffer(Jimp.MIME_PNG, (err, buffer) => {
+    if (err) {
+      console.error(err);
+      return;
+    }
+    fs.writeFileSync(path, buffer);
   });
 };
 
