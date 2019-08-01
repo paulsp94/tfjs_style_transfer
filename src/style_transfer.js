@@ -35,6 +35,8 @@ const MEANS = tf.tensor1d([123.68, 116.779, 103.939]).reshape([1, 1, 1, 3]);
 const loadImageToTensor = async (path) => {
   console.info('Loading Image.');
   const img = await Jimp.read(path);
+  // const scalingFactor = 512 / Math.max(img.bitmap.height, img.bitmap.width);
+  // img.scale(scalingFactor);
   img.resize(224, 224);
 
   const p = [];
@@ -46,32 +48,38 @@ const loadImageToTensor = async (path) => {
   });
 
   return tf
-    .tensor3d(p, [224, 224, 3])
-    .reshape([1, 224, 224, 3])
-    .sub(MEANS);
+    .tensor3d(p, [img.bitmap.width, img.bitmap.height, 3])
+    .reshape([1, img.bitmap.width, img.bitmap.height, 3])
+    .div(255);
+  // .sub(MEANS);
   // TODO: Do I need to clip?
   // .clipByValue(-MEANS, 255 - MEANS);
 };
 
 const saveImage = (path, tensor) => {
-  const newTensor = tensor.add(MEANS).reshape([224, 224, 3]);
-  const newTensorArray = Array.from(newTensor.dataSync());
-  const image = new Jimp(224, 224);
-  let i = 0;
+  tf.tidy(() => {
+    const newTensor = tensor
+      .mul(255)
+      .clipByValue(0, 255)
+      .reshape([224, 224, 3]);
+    const newTensorArray = Array.from(newTensor.dataSync());
+    const image = new Jimp(224, 224);
+    let i = 0;
 
-  image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, idx) {
-    this.bitmap.data[idx + 0] = newTensorArray[i++];
-    this.bitmap.data[idx + 1] = newTensorArray[i++];
-    this.bitmap.data[idx + 2] = newTensorArray[i++];
-    this.bitmap.data[idx + 3] = 255;
-  });
+    image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, idx) {
+      this.bitmap.data[idx + 0] = newTensorArray[i++];
+      this.bitmap.data[idx + 1] = newTensorArray[i++];
+      this.bitmap.data[idx + 2] = newTensorArray[i++];
+      this.bitmap.data[idx + 3] = 255;
+    });
 
-  image.getBuffer(Jimp.MIME_PNG, (err, buffer) => {
-    if (err) {
-      console.error(err);
-      return;
-    }
-    fs.writeFileSync(path, buffer);
+    image.getBuffer(Jimp.MIME_PNG, (err, buffer) => {
+      if (err) {
+        console.error(err);
+        return;
+      }
+      fs.writeFileSync(path, buffer);
+    });
   });
 };
 
@@ -87,36 +95,67 @@ const vggLayers = async (layerNames) => {
 };
 
 const gramMatrix = inputTensor => tf.tidy(() => {
-  const channels = inputTensor.shape.slice(-1);
-  const a = inputTensor.reshape([-1, channels]);
-  const gram = tf.div(tf.matMul(a, a, true), inputTensor.size);
+  const [i, h, w, c] = inputTensor.shape;
+  const a = inputTensor.reshape([-1, c]);
+  const gram = tf.div(tf.matMul(a, a, true), tf.scalar(h * w));
   return gram;
 });
 
-const styleLoss = (baseStyle, gramTarget) => tf.tidy(() => tf.sum(tf.square(tf.sub(baseStyle, gramTarget))));
-const contentLoss = (baseContent, targetContent) => tf.tidy(() => tf.div(tf.sum(tf.square(tf.sub(baseContent, targetContent))), tf.scalar(2)));
-
 const featureRepresentation = async (model, contentPath, stylePath) => {
-  const contentImage = await loadImageToTensor(contentPath);
-  const styleImage = await loadImageToTensor(stylePath);
-
-  const contentOutputs = await model.predict(contentImage);
-  const styleOutputs = await model.predict(styleImage);
+  const contentOutputs = await loadImageToTensor(contentPath)
+    .then(tensor => tensor
+      .cast('float32')
+      .mul(255)
+      .sub(MEANS))
+    .then(tensor => model.predict(tensor));
+  const styleOutputs = await loadImageToTensor(stylePath)
+    .then(tensor => tensor
+      .cast('float32')
+      .mul(255)
+      .sub(MEANS))
+    .then(tensor => model.predict(tensor));
 
   return [styleOutputs, contentOutputs];
 };
 
 const generateNoiseImage = (image, noiseRatio = 0.6) => tf.tidy(() => {
-  const noiseImage = tf.randomUniform([1, 224, 224, 3], -20, 20);
+  const noiseImage = tf.randomUniform(image.shape, -0.2, 0 - 2);
   return noiseImage.mul(noiseRatio).add(image.mul(1 - noiseRatio));
 });
+
+const computeStyleLoss = (generatedFeature, gramStyleFeature) => {
+  const generatedGramStyle = gramMatrix(generatedFeature);
+
+  return generatedGramStyle
+    .sub(gramStyleFeature)
+    .pow(2)
+    .mean();
+};
+
+const computeContentLoss = (generatedOutputs, contentFeatures) => generatedOutputs
+  .slice(-1)[0]
+  .sub(contentFeatures.slice(-1)[0])
+  .pow(2)
+  .mean();
+
+const highPassXY = (image) => {
+  const xVar = image.sub(image.reverse(1));
+  const yVar = image.sub(image.reverse(2));
+  return [xVar, yVar];
+};
+
+const totalVariationLoss = (image) => {
+  const [xDeltas, yDeltas] = highPassXY(image);
+  return tf.mean(xDeltas.pow(2)).add(tf.mean(yDeltas.pow(2)));
+};
 
 const runStyleTransfer = async (
   contentPath,
   stylePath,
   numIterations = 2000,
-  contentWeight = 1,
-  styleWeight = 4,
+  contentWeight = 1e4,
+  styleWeight = 1e-2,
+  totalVariationWeight = 1e8,
 ) => {
   const model = await vggLayers(styleLayers);
 
@@ -126,35 +165,31 @@ const runStyleTransfer = async (
     stylePath,
   );
 
-  const gramStyleFeatures = styleFeatures.map(styleFeature => gramMatrix(styleFeature));
+  const gramStyleFeatures = styleFeatures
+    .slice(0, -1)
+    .map(styleFeature => gramMatrix(styleFeature));
 
   const contentImage = await loadImageToTensor(contentPath);
 
   let bestLoss = Infinity;
   let bestImg;
   let initImage;
-  initImage = generateNoiseImage(contentImage, 1).variable();
+  initImage = generateNoiseImage(contentImage, 0).variable();
 
   const computeLoss = () => tf.tidy(() => {
-    const generatedOutputs = model.predict(initImage);
-    const gramGeneratedFeatures = generatedOutputs.map(generatedFeature => gramMatrix(generatedFeature));
+    const generatedOutputs = model.predict(initImage.mul(255).sub(MEANS));
 
-    let styleScore = tf.scalar(0);
-    const weightPerStyleLayer = 1.0 / parseFloat(numStyleLayers);
-    gramStyleFeatures.forEach((targetStyle, i) => {
-      styleScore = tf.add(
-        styleScore,
-        tf.mul(weightPerStyleLayer, styleLoss(gramGeneratedFeatures[i], targetStyle)),
-      );
-    });
+    const styleScore = tf
+      .addN(
+        gramStyleFeatures.map((target, idx) => computeStyleLoss(generatedOutputs[idx], target)),
+      )
+      .mul(styleWeight / numStyleLayers);
 
-    let contentScore = contentLoss(generatedOutputs.slice(-1)[0], contentFeatures.slice(-1)[0]);
+    const contentScore = computeContentLoss(generatedOutputs, contentFeatures).mul(contentWeight);
 
-    styleScore = styleScore.mul(tf.scalar(styleWeight));
-    contentScore = contentScore.mul(tf.scalar(contentWeight));
-    const loss = tf.add(styleScore, contentScore);
+    const tvScore = totalVariationLoss(initImage).mul(totalVariationWeight);
 
-    return loss;
+    return tf.addN([styleScore, contentScore, tvScore]);
   });
 
   let startTime = new Date().getTime();
@@ -162,16 +197,16 @@ const runStyleTransfer = async (
 
   let loss;
   for (let index = 0; index <= numIterations; index++) {
-    const opt = tf.train.adam(0.02, 0.99, 1e-1);
-    opt.minimize(() => computeLoss(), true, [initImage]);
-    loss = await computeLoss().array();
+    const opt = tf.train.adam(0.02, 0.99, 0.999, 1e-1);
+    loss = opt.minimize(() => computeLoss(), true).dataSync()[0];
+    initImage = initImage.clipByValue(0, 1).variable();
     if (bestLoss > loss) {
       bestLoss = loss;
       bestImg = initImage.clone();
     }
 
     if (index % 100 === 0) {
-      await saveImage(`./results/${index}_${bestLoss}.jpg`, bestImg);
+      saveImage(`./results/${index}_${bestLoss}.jpg`, initImage);
       console.log(tf.memory());
       console.info(`Iteration: ${index}`);
       console.info(
