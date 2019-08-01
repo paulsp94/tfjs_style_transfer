@@ -5,7 +5,7 @@ const fs = require('fs');
 
 const local = true;
 
-const contentLayer = 'block5_conv2';
+const contentLayer = ['block5_conv2'];
 const styleLayers = [
   'block1_conv1',
   'block2_conv1',
@@ -35,9 +35,9 @@ const MEANS = tf.tensor1d([123.68, 116.779, 103.939]).reshape([1, 1, 1, 3]);
 const loadImageToTensor = async (path) => {
   console.info('Loading Image.');
   const img = await Jimp.read(path);
-  // const scalingFactor = 512 / Math.max(img.bitmap.height, img.bitmap.width);
-  // img.scale(scalingFactor);
-  img.resize(224, 224);
+  const scalingFactor = 512 / Math.max(img.bitmap.height, img.bitmap.width);
+  img.scale(scalingFactor);
+  // img.resize(224, 224);
 
   const p = [];
 
@@ -51,9 +51,6 @@ const loadImageToTensor = async (path) => {
     .tensor3d(p, [img.bitmap.width, img.bitmap.height, 3])
     .reshape([1, img.bitmap.width, img.bitmap.height, 3])
     .div(255);
-  // .sub(MEANS);
-  // TODO: Do I need to clip?
-  // .clipByValue(-MEANS, 255 - MEANS);
 };
 
 const saveImage = (path, tensor) => {
@@ -61,9 +58,9 @@ const saveImage = (path, tensor) => {
     const newTensor = tensor
       .mul(255)
       .clipByValue(0, 255)
-      .reshape([224, 224, 3]);
+      .reshape(tensor.shape.slice(1));
     const newTensorArray = Array.from(newTensor.dataSync());
-    const image = new Jimp(224, 224);
+    const image = new Jimp(...tensor.shape.slice(1, 3));
     let i = 0;
 
     image.scan(0, 0, image.bitmap.width, image.bitmap.height, function (x, y, idx) {
@@ -83,15 +80,17 @@ const saveImage = (path, tensor) => {
   });
 };
 
-const vggLayers = async (layerNames) => {
+const vggLayers = async (inputShape) => {
   console.info('Loading Model!');
   const vgg19 = await tf.loadLayersModel(vgg19URL);
   vgg19.trainable = false;
 
-  const outputs = layerNames.map(name => vgg19.getLayer(name).output);
-  outputs.push(vgg19.getLayer(contentLayer).output);
+  // const outputs = layerNames.map(name => vgg19.getLayer(name).output);
+  // outputs.push(vgg19.getLayer(contentLayer[0]).output);
+  inputShape[0] = null;
+  vgg19.input.shape = inputShape;
 
-  return tf.model({ inputs: vgg19.input, outputs });
+  return tf.model({ inputs: vgg19.input, outputs: vgg19.output });
 };
 
 const gramMatrix = inputTensor => tf.tidy(() => {
@@ -101,21 +100,39 @@ const gramMatrix = inputTensor => tf.tidy(() => {
   return gram;
 });
 
-const featureRepresentation = async (model, contentPath, stylePath) => {
-  const contentOutputs = await loadImageToTensor(contentPath)
+const getLayerResults = (model, image, layers) => {
+  const layersCopy = [...layers];
+  let currentResult = image;
+  const results = [];
+  let idx = 1;
+
+  while (layersCopy.length !== 0) {
+    const layer = model.getLayer(null, idx++);
+    if (layersCopy.includes(layer.name)) {
+      results.push(layer.apply(currentResult));
+      layersCopy.splice(layersCopy.indexOf(layer.name), 1);
+    }
+    currentResult = layer.apply(currentResult);
+  }
+
+  return results;
+};
+
+const featureRepresentation = async (contentPath, stylePath) => {
+  const [contentOutputs, contentModel] = await loadImageToTensor(contentPath)
     .then(tensor => tensor
       .cast('float32')
       .mul(255)
       .sub(MEANS))
-    .then(tensor => model.predict(tensor));
+    .then(tensor => vggLayers(tensor.shape).then(model => [getLayerResults(model, tensor, contentLayer), model]));
   const styleOutputs = await loadImageToTensor(stylePath)
     .then(tensor => tensor
       .cast('float32')
       .mul(255)
       .sub(MEANS))
-    .then(tensor => model.predict(tensor));
+    .then(tensor => vggLayers(tensor.shape).then(model => getLayerResults(model, tensor, styleLayers)));
 
-  return [styleOutputs, contentOutputs];
+  return [styleOutputs, contentOutputs, contentModel];
 };
 
 const generateNoiseImage = (image, noiseRatio = 0.6) => tf.tidy(() => {
@@ -157,10 +174,9 @@ const runStyleTransfer = async (
   styleWeight = 1e-2,
   totalVariationWeight = 1e8,
 ) => {
-  const model = await vggLayers(styleLayers);
+  // const model = await vggLayers(styleLayers);
 
-  const [styleFeatures, contentFeatures] = await featureRepresentation(
-    model,
+  const [styleFeatures, contentFeatures, model] = await featureRepresentation(
     contentPath,
     stylePath,
   );
@@ -177,7 +193,10 @@ const runStyleTransfer = async (
   initImage = generateNoiseImage(contentImage, 0).variable();
 
   const computeLoss = () => tf.tidy(() => {
-    const generatedOutputs = model.predict(initImage.mul(255).sub(MEANS));
+    const generatedOutputs = getLayerResults(model, initImage.mul(255).sub(MEANS), [
+      ...styleLayers,
+      ...contentLayer,
+    ]);
 
     const styleScore = tf
       .addN(
@@ -198,7 +217,7 @@ const runStyleTransfer = async (
   let loss;
   for (let index = 0; index <= numIterations; index++) {
     const opt = tf.train.adam(0.02, 0.99, 0.999, 1e-1);
-    loss = opt.minimize(() => computeLoss(), true).dataSync()[0];
+    [loss] = opt.minimize(() => computeLoss(), true).dataSync();
     initImage = initImage.clipByValue(0, 1).variable();
     if (bestLoss > loss) {
       bestLoss = loss;
