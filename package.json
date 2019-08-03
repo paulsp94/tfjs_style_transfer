@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "build": "rimraf dist/ && babel ./ --out-dir dist/ --ignore ./node_modules,./.babelrc,./package.json,./npm-debug.log --copy-files",
-    "start": "npm --scripts-prepend-node-path run build && node src/styleTransfer.js",
+    "start": "nodemon --exec babel-node src/styleTransfer.js",
+    "debug": "babel-node debug src/styleTransfer.js",
     "lint": "eslint 'src/**/*.js' --fix",
     "format": "prettier-eslint 'server/**/*.{js,json}' --write"
   },
@@ -19,9 +20,10 @@
     "jimp": "^0.6.4"
   },
   "devDependencies": {
-    "@babel/cli": "^7.4.4",
-    "@babel/core": "^7.4.5",
-    "@babel/preset-env": "^7.4.5",
+    "@babel/cli": "^7.5.5",
+    "@babel/core": "^7.5.5",
+    "@babel/node": "^7.5.5",
+    "@babel/preset-env": "^7.5.5",
     "@babel/register": "^7.4.4",
     "eslint": "^5.16.0",
     "eslint-config-airbnb": "^17.1.0",
@@ -31,6 +33,7 @@
     "eslint-plugin-jsx-a11y": "^6.2.1",
     "eslint-plugin-prettier": "^3.1.0",
     "eslint-plugin-promise": "^4.2.1",
+    "nodemon": "^1.19.1",
     "prettier": "1.18.2",
     "prettier-eslint-cli": "^5.0.0",
     "rimraf": "^2.6.3"
