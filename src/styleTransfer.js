@@ -5,7 +5,7 @@ import { loadImageToTensor, saveImage } from './ioUtils';
 
 const local = true;
 
-const contentLayer = ['block2_conv2'];
+const contentLayer = ['block5_conv2'];
 const styleLayers = [
   'block1_conv1',
   'block2_conv1',
@@ -21,8 +21,8 @@ let styleImg;
 let vgg19URL;
 
 if (local) {
-  contentImg = `${__dirname}/assets/content.jpg`;
-  styleImg = `${__dirname}/assets/style.jpg`;
+  contentImg = `${__dirname}/../assets/content.jpg`;
+  styleImg = `${__dirname}/../assets/style.jpg`;
   vgg19URL = `file:///${__dirname}/../../vgg19-tensorflowjs-model/model/model.json`;
 } else {
   contentImg = 'https://storage.googleapis.com/download.tensorflow.org/example_images/Green_Sea_Turtle_grazing_seagrass.jpg';
@@ -32,17 +32,43 @@ if (local) {
 
 const MEANS = tf.tensor1d([123.68, 116.779, 103.939]).reshape([1, 1, 1, 3]);
 
-const vggLayers = async (inputShape) => {
+// type ShapeMap = { [name: string]: [number, number, number, number] };
+
+// Source: https://github.com/tensorflow/tfjs/issues/477#issuecomment-403523104
+const mapInputShapes = (model, newShapeMap) => {
+  const cfg = { ...model.getConfig() };
+  cfg.layers = cfg.layers.map((l) => {
+    if (l.name in newShapeMap) {
+      return {
+        ...l,
+        config: {
+          ...l.config,
+          batchInputShape: newShapeMap[l.name],
+        },
+      };
+    }
+    return l;
+  });
+
+  const map = tf.serialization.SerializationMap.getMap().classNameMap;
+  const [cls, fromConfig] = map[model.getClassName()];
+
+  return fromConfig(cls, cfg);
+};
+
+const vggLayers = async (inputShape, layerNames) => {
   console.info('Loading Model!');
   const vgg19 = await tf.loadLayersModel(vgg19URL);
   vgg19.trainable = false;
 
-  // const outputs = layerNames.map(name => vgg19.getLayer(name).output);
-  // outputs.push(vgg19.getLayer(contentLayer[0]).output);
-  inputShape[0] = null;
-  vgg19.input.shape = inputShape;
+  const newInputShape = [...inputShape];
+  newInputShape[0] = null;
+  const newConfig = mapInputShapes(vgg19, { input_1: inputShape });
 
-  return tf.model({ inputs: vgg19.input, outputs: vgg19.output });
+  const outputs = layerNames.map(name => newConfig.getLayer(name).output);
+  tf.dispose(vgg19);
+
+  return tf.model({ inputs: newConfig.input, outputs });
 };
 
 const gramMatrix = inputTensor => tf.tidy(() => {
@@ -52,47 +78,29 @@ const gramMatrix = inputTensor => tf.tidy(() => {
   return gram;
 });
 
-const getLayerResults = (model, image, sLayers, cLayers) => tf.tidy(() => {
-  const layersCopy = [...sLayers, ...cLayers];
-  let currentResult = image;
-  const styleResults = [];
-  const contentResults = [];
-  let idx = 1;
-
-  while (layersCopy.length !== 0) {
-    const layer = model.getLayer(null, idx++);
-    if (layersCopy.includes(layer.name)) {
-      if (cLayers.includes(layer.name)) {
-        contentResults.push(layer.apply(currentResult));
-      } else {
-        styleResults.push(layer.apply(currentResult));
-      }
-      layersCopy.splice(layersCopy.indexOf(layer.name), 1);
-    }
-    currentResult = layer.apply(currentResult);
-  }
-
-  return [...styleResults, ...contentResults];
-});
-
 const featureRepresentation = async (contentPath, stylePath) => {
-  const [contentOutputs, contentModel] = await loadImageToTensor(contentPath)
-    .then(tensor => tensor
+  const [contentOutputs, contentShape] = await loadImageToTensor(contentPath)
+    .then(tensor => tf.tidy(() => tensor
       .cast('float32')
       .mul(255)
-      .sub(MEANS))
-    .then(tensor => vggLayers(tensor.shape).then(model => [
-      getLayerResults(model, tensor, [], contentLayer),
-      model,
-    ]));
+      .sub(MEANS)))
+    .then(tensor => vggLayers(tensor.shape, contentLayer).then((model) => {
+      const results = model.predict(tensor);
+      tf.dispose(model);
+      return [results, tensor.shape];
+    }));
   const styleOutputs = await loadImageToTensor(stylePath)
-    .then(tensor => tensor
+    .then(tensor => tf.tidy(() => tensor
       .cast('float32')
       .mul(255)
-      .sub(MEANS))
-    .then(tensor => vggLayers(tensor.shape).then(model => getLayerResults(model, tensor, styleLayers, [])));
+      .sub(MEANS)))
+    .then(tensor => vggLayers(tensor.shape, styleLayers).then((model) => {
+      const results = model.predict(tensor);
+      tf.dispose(model);
+      return results;
+    }));
 
-  return [styleOutputs, contentOutputs, contentModel];
+  return [styleOutputs, contentOutputs, contentShape];
 };
 
 const generateNoiseImage = (image, noiseRatio = 0.6) => tf.tidy(() => {
@@ -107,7 +115,7 @@ const computeStyleLoss = (generatedFeature, gramStyleFeature) => tf.tidy(() => g
 
 const computeContentLoss = (generatedOutputs, contentFeatures) => tf.tidy(() => generatedOutputs
   .slice(-1)[0]
-  .sub(contentFeatures[0])
+  .sub(contentFeatures)
   .pow(2)
   .mean());
 
@@ -130,27 +138,21 @@ const runStyleTransfer = async (
   styleWeight = 1e-2,
   totalVariationWeight = 1e8,
 ) => {
-  const [styleFeatures, contentFeatures, model] = await featureRepresentation(
+  const [styleFeatures, contentFeatures, contentShape] = await featureRepresentation(
     contentPath,
     stylePath,
   );
-
+  const model = await vggLayers(contentShape, [...styleLayers, ...contentLayer]);
   const gramStyleFeatures = styleFeatures.map(styleFeature => gramMatrix(styleFeature));
-
   const contentImage = await loadImageToTensor(contentPath);
-
+  
   let bestLoss = Infinity;
   let bestImg;
   let initImage;
-  initImage = generateNoiseImage(contentImage, 1).variable();
-
+  initImage = generateNoiseImage(contentImage).variable();
+  
   const computeLoss = () => tf.tidy(() => {
-    const generatedOutputs = getLayerResults(
-      model,
-      initImage.mul(255).sub(MEANS),
-      styleLayers,
-      contentLayer,
-    );
+    const generatedOutputs = model.predict(initImage.mul(255).sub(MEANS));
 
     const styleScore = tf
       .addN(
@@ -191,8 +193,9 @@ const runStyleTransfer = async (
 
   for (let index = 0; index <= numIterations; index++) {
     const opt = tf.train.adam(0.02, 0.99, 0.999, 1e-1);
-    step(index, opt);
+    step(index, opt); // +61 Tensors
     tf.dispose(opt);
+    // one step +1 Tensor
   }
 
   console.info(`Total time: ${new Date().getTime() - globalStart}s`);

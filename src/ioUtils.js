@@ -5,7 +5,7 @@ import { writeFileSync } from 'fs';
 export const loadImageToTensor = async (path) => {
   console.info('Loading Image.');
   const img = await Jimp.read(path);
-  const scalingFactor = 512 / Math.max(img.bitmap.height, img.bitmap.width);
+  const scalingFactor = 224 / Math.max(img.bitmap.height, img.bitmap.width);
   img.scale(scalingFactor);
   // img.resize(224, 224);
 
