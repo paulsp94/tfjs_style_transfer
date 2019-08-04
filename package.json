@@ -5,9 +5,8 @@
   "main": "style_transfer.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "rimraf dist/ && babel ./ --out-dir dist/ --ignore ./node_modules,./.babelrc,./package.json,./npm-debug.log --copy-files",
+    "compile": "babel src --out-dir .compiled --source-maps --watch",
     "start": "nodemon --exec babel-node src/styleTransfer.js",
-    "debug": "babel-node debug src/styleTransfer.js",
     "lint": "eslint 'src/**/*.js' --fix",
     "format": "prettier-eslint 'server/**/*.{js,json}' --write"
   },
@@ -23,8 +22,11 @@
     "@babel/cli": "^7.5.5",
     "@babel/core": "^7.5.5",
     "@babel/node": "^7.5.5",
+    "@babel/plugin-transform-async-to-generator": "^7.5.0",
+    "@babel/plugin-transform-runtime": "^7.5.5",
     "@babel/preset-env": "^7.5.5",
     "@babel/register": "^7.4.4",
+    "@babel/runtime": "^7.5.5",
     "eslint": "^5.16.0",
     "eslint-config-airbnb": "^17.1.0",
     "eslint-config-airbnb-base": "^13.2.0",

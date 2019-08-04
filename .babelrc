@@ -1,9 +1,18 @@
 {
   "presets": ["@babel/preset-env"],
   "env": {
-    "development": {
+    "debug": {
       "sourceMaps": true,
       "retainLines": true
     }
-  }
+  },
+  "plugins": [
+    [
+      "@babel/plugin-transform-runtime",
+      {
+        "regenerator": true
+      }
+    ],
+    "@babel/plugin-transform-async-to-generator"
+  ]
 }
