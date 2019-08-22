@@ -6,9 +6,10 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "compile": "babel src --out-dir .compiled --source-maps --watch",
-    "start": "nodemon --exec babel-node src/styleTransfer.js",
+    "start": "nodemon --exec babel-node src/styleTransfer.js --inspect",
     "lint": "eslint 'src/**/*.js' --fix",
-    "format": "prettier-eslint 'server/**/*.{js,json}' --write"
+    "format": "prettier-eslint 'server/**/*.{js,json}' --write",
+    "build": "babel src -d dist --source-maps"
   },
   "author": "",
   "license": "ISC",
