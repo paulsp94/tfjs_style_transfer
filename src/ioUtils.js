@@ -2,12 +2,14 @@ import * as tf from '@tensorflow/tfjs-node';
 import Jimp from 'jimp';
 import { writeFileSync } from 'fs';
 
+import { MEANS } from './globals';
+
 export const loadImageToTensor = async (path) => {
   console.info('Loading Image.');
   const img = await Jimp.read(path);
-  const scalingFactor = 224 / Math.max(img.bitmap.height, img.bitmap.width);
-  img.scale(scalingFactor);
-  // img.resize(224, 224);
+  // const scalingFactor = 512 / Math.max(img.bitmap.height, img.bitmap.width);
+  // img.scale(scalingFactor);
+  img.resize(224, 224);
 
   const p = [];
 
@@ -19,6 +21,7 @@ export const loadImageToTensor = async (path) => {
 
   return tf
     .tensor3d(p, [img.bitmap.width, img.bitmap.height, 3])
+    .sub(MEANS)
     .reshape([1, img.bitmap.width, img.bitmap.height, 3])
     .div(255);
 };
@@ -26,6 +29,7 @@ export const loadImageToTensor = async (path) => {
 export const saveImage = (path, tensor) => tf.tidy(() => {
   const newTensor = tensor
     .mul(255)
+    .add(MEANS)
     .clipByValue(0, 255)
     .reshape(tensor.shape.slice(1));
   const newTensorArray = Array.from(newTensor.dataSync());
