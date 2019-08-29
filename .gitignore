@@ -1,3 +1,9 @@
+# Project specific
+tfjs_vgg19_imagenet
+.compiled
+.vscode
+results/
+
 # Logs
 logs
 *.log
@@ -86,6 +92,3 @@ typings/
 
 # DynamoDB Local files
 .dynamodb/
-
-# Custom
-results/
