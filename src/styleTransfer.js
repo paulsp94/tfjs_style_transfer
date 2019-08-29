@@ -26,8 +26,7 @@ let vgg19URL;
 if (local) {
   contentImg = `${__dirname}/../assets/content.jpg`;
   styleImg = `${__dirname}/../assets/starryNight.jpeg`;
-  // vgg19URL = `file:///${__dirname}/../../vgg19-tensorflowjs-model/model/model.json`;
-  vgg19URL = `file:///${__dirname}/../../../models/vgg19/model/model.json`;
+  vgg19URL = `file:///${__dirname}/../tfjs_vgg19_imagenet/model/model.json`;
 } else {
   contentImg = 'https://storage.googleapis.com/download.tensorflow.org/example_images/Green_Sea_Turtle_grazing_seagrass.jpg';
   styleImg = 'https://storage.googleapis.com/download.tensorflow.org/example_images/Vassily_Kandinsky%2C_1913_-_Composition_7.jpg';
